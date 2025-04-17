@@ -1,0 +1,185 @@
+body {
+    font-family: sans-serif;
+    line-height: 1.6;
+    margin: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+.container {
+    max-width: 960px;
+    margin: auto;
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+h1, h2 {
+    color: #0056b3; /* Dark blue */
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+h3 {
+    color: #0056b3;
+    margin-top: 30px;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 5px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+input[type="number"],
+select {
+    width: 80px;
+    padding: 8px;
+    margin-bottom: 15px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+input[type="radio"] {
+     margin-right: 5px;
+}
+
+.radio-group label {
+    display: inline-block;
+    margin-right: 15px;
+    font-weight: normal;
+}
+
+
+#dynamic-inputs {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px dashed #ccc;
+}
+
+.input-group {
+    margin-bottom: 15px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.input-group label {
+     min-width: 100px; /* Align labels */
+     margin-right: 10px;
+}
+
+.input-group input[type="number"] {
+    width: 70px; /* Smaller width for coefficients */
+    margin-right: 5px;
+    margin-bottom: 5px; /* Space between inputs if they wrap */
+}
+
+.constraint-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.constraint-row label {
+    min-width: 100px;
+    margin-right: 10px;
+}
+
+.constraint-row .coeff-inputs {
+    display: flex;
+    flex-wrap: wrap;
+    margin-right: 10px;
+}
+
+.constraint-row .rhs-input {
+    margin-left: auto; /* Push RHS to the right if space allows */
+    display: flex;
+    align-items: center;
+}
+.constraint-row .rhs-input label {
+    min-width: 40px;
+}
+
+
+button[type="submit"] {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background-color: #007bff; /* Primary blue */
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-top: 20px;
+}
+
+button[type="submit"]:hover {
+    background-color: #0056b3; /* Darker blue */
+}
+
+#results {
+    margin-top: 30px;
+    border-top: 2px solid #0056b3;
+    padding-top: 20px;
+}
+
+.iteration {
+    margin-bottom: 25px;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    background-color: #f9f9f9;
+}
+
+.iteration h4 {
+    margin-top: 0;
+    color: #007bff;
+}
+
+.tableau {
+    font-family: monospace;
+    white-space: pre; /* Preserve whitespace and formatting */
+    overflow-x: auto; /* Add scrollbars if tableau is too wide */
+    background: #eee;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 10px;
+    font-size: 0.9em; /* Slightly smaller font for tables */
+}
+
+.final-solution {
+    background-color: #e7f7e7; /* Light green */
+    padding: 15px;
+    border: 1px solid #a7d7a7; /* Green border */
+    border-radius: 5px;
+}
+.final-solution p {
+    margin: 5px 0;
+}
+
+.error {
+    color: #dc3545; /* Red */
+    background-color: #f8d7da; /* Light red */
+    border: 1px solid #f5c6cb; /* Red border */
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 15px;
+}
+
+.warning {
+    color: #856404; /* Dark yellow */
+    background-color: #fff3cd; /* Light yellow */
+    border: 1px solid #ffeeba; /* Yellow border */
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 15px;
+}

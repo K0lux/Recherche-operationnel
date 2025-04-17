@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculateur Simplex</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Calculateur de Programmation Linéaire (Méthode Simplex)</h1>
+
+        <form action="/solve" method="post" id="simplex-form">
+            <h2>Définition du Problème</h2>
+
+            <div class="radio-group">
+                <label>Objectif:</label>
+                <input type="radio" id="max" name="objective_type" value="max" checked>
+                <label for="max">Maximiser</label>
+                <input type="radio" id="min" name="objective_type" value="min">
+                <label for="min">Minimiser</label>
+            </div>
+
+            <div>
+                <label for="num_vars">Nombre de Variables de Décision:</label>
+                <input type="number" id="num_vars" name="num_vars" min="1" value="{{ request.form.num_vars or 2 }}" required>
+            </div>
+
+            <div>
+                <label for="num_constraints">Nombre de Contraintes (<=):</label>
+                <input type="number" id="num_constraints" name="num_constraints" min="1" value="{{ request.form.num_constraints or 2 }}" required>
+            </div>
+
+            <div id="dynamic-inputs">
+                <!-- Input fields will be generated here by JavaScript -->
+                 <p style="color: #666;"><i>Entrez le nombre de variables et de contraintes ci-dessus pour générer les champs de saisie.</i></p>
+            </div>
+
+            <button type="submit">Résoudre</button>
+        </form>
+
+        {% if error %}
+            <div class="error">
+                <h2>Erreur</h2>
+                <p>{{ error }}</p>
+            </div>
+        {% endif %}
+
+        {% if warning %}
+            <div class="warning">
+                <strong>Avertissement:</strong> {{ warning }}
+            </div>
+        {% endif %}
+
+
+        {% if results %}
+            <div id="results">
+                <h2>Résultats</h2>
+
+                {% if results.iterations %}
+                    <h3>Tableaux des Itérations</h3>
+                    {% for iter_data in results.iterations %}
+                        <div class="iteration">
+                            <h4>{{ iter_data.title }}</h4>
+                            {% if iter_data.message %}
+                                <p>{{ iter_data.message }}</p>
+                            {% endif %}
+                            {% if iter_data.pivot_info %}
+                                <p>
+                                  Entrante: {{ iter_data.pivot_info.entering }} |
+                                  Sortante: {{ iter_data.pivot_info.leaving }} |
+                                  Pivot: {{ iter_data.pivot_info.pivot_val }}
+                                  (Ligne {{ iter_data.pivot_info.row_idx }}, Colonne {{ iter_data.pivot_info.col_idx }})
+                                </p>
+                            {% endif %}
+                             <div class="tableau">{{ iter_data.tableau_str }}</div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+
+
+                <h3>Solution Finale</h3>
+                 <div class="final-solution {{ results.status_class }}">
+                     <p><strong>Statut:</strong> {{ results.status }}</p>
+                    {% if results.solution %}
+                         <p><strong>Valeur {{ results.objective_type|capitalize }}imale Z = {{ "%.4f"|format(results.objective_value) }}</strong></p>
+                         <p><strong>Variables de décision:</strong></p>
+                         <ul>
+                         {% for var, val in results.solution.items() %}
+                            <li>{{ var }} = {{ "%.4f"|format(val) }}</li>
+                         {% endfor %}
+                         </ul>
+                          <p><strong>Variables d'écart (Slack):</strong></p>
+                         <ul>
+                         {% for var, val in results.slack_solution.items() %}
+                            <li>{{ var }} = {{ "%.4f"|format(val) }}</li>
+                         {% endfor %}
+                         </ul>
+                    {% endif %}
+                 </div>
+
+            </div>
+        {% endif %}
+
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
