@@ -3,15 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Calculateur Simplex</title>
+    <title>Calculateur Simplex  Avancé (RO)</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>Calculateur de Programmation Linéaire (Méthode Simplex)</h1>
+
+    {% include 'navbar.html' %}
+    
+    <main class="container">
+        <h1>Programmation Linéaire - Méthode Simplex & Analyse</h1>
 
         <form action="/solve" method="post" id="simplex-form">
-            <h2>Définition du Problème</h2>
+            <h2>Définition du Problème primal</h2>
 
             <div class="radio-group">
                 <label>Objectif:</label>
@@ -27,7 +30,7 @@
             </div>
 
             <div>
-                <label for="num_constraints">Nombre de Contraintes (<=):</label>
+                <label for="num_constraints">Nombre de Contraintes:</label>
                 <input type="number" id="num_constraints" name="num_constraints" min="1" value="{{ request.form.num_constraints or 2 }}" required>
             </div>
 
@@ -36,7 +39,7 @@
                  <p style="color: #666;"><i>Entrez le nombre de variables et de contraintes ci-dessus pour générer les champs de saisie.</i></p>
             </div>
 
-            <button type="submit">Résoudre</button>
+            <button type="submit">Résoudre & Analyser</button>
         </form>
 
         {% if error %}
@@ -52,6 +55,36 @@
             </div>
         {% endif %}
 
+
+        {% if problem_data and problem_data.constraints %}
+            <h3>Tableau des Contraintes</h3>
+            <table class="table table-bordered">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        {% for var in problem_data.var_names %}
+                            <th>{{ var }}</th>
+                        {% endfor %}
+                        <th>Type</th>
+                        <th>Membre droit (RHS)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in problem_data.constraints %}
+                        <tr>
+                            <td>C{{ loop.index }}</td>
+                            {% for val in c.coeffs %}
+                                <td>{{ val }}</td>
+                            {% endfor %}
+                            <td>
+                                {% if c.type == 'le' %}&le;{% elif c.type == 'ge' %}&ge;{% else %}={% endif %}
+                            </td>
+                            <td>{{ c.rhs }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
 
         {% if results %}
             <div id="results">
@@ -73,37 +106,87 @@
                                   (Ligne {{ iter_data.pivot_info.row_idx }}, Colonne {{ iter_data.pivot_info.col_idx }})
                                 </p>
                             {% endif %}
-                             <div class="tableau">{{ iter_data.tableau_str }}</div>
+                            <div class="tableau">{{ iter_data.tableau_str|safe }}</div>
                         </div>
                     {% endfor %}
                 {% endif %}
 
-
                 <h3>Solution Finale</h3>
-                 <div class="final-solution {{ results.status_class }}">
-                     <p><strong>Statut:</strong> {{ results.status }}</p>
-                    {% if results.solution %}
-                         <p><strong>Valeur {{ results.objective_type|capitalize }}imale Z = {{ "%.4f"|format(results.objective_value) }}</strong></p>
-                         <p><strong>Variables de décision:</strong></p>
-                         <ul>
-                         {% for var, val in results.solution.items() %}
-                            <li>{{ var }} = {{ "%.4f"|format(val) }}</li>
-                         {% endfor %}
-                         </ul>
-                          <p><strong>Variables d'écart (Slack):</strong></p>
-                         <ul>
-                         {% for var, val in results.slack_solution.items() %}
-                            <li>{{ var }} = {{ "%.4f"|format(val) }}</li>
-                         {% endfor %}
-                         </ul>
-                    {% endif %}
-                 </div>
+                <div class="final-solution {{ results.status_class }}">
+                    <p><strong>Statut:</strong> {{ results.status }}</p>
+
+                   {# Vérifier si results.solution et results.objective_value existent avant de les afficher #}
+                   {# C'est important pour les cas comme "Infaisable" ou "Non Borné" où ils peuvent être None #}
+                   {% if results.solution and results.objective_value is not none %}
+                        <p><strong>Valeur {{ results.objective_type|capitalize }}imale Z = {{ "%.4f"|format(results.objective_value) }}</strong></p>
+                        
+                        <h4>Variables de décision :</h4> {# Utiliser h4 pour une meilleure hiérarchie que p>strong #}
+                        <ul>
+                        {% for var, val in results.solution.items() %}
+                           <li>{{ var }} = {{ "%.4f"|format(val) }}</li>
+                        {% endfor %}
+                        </ul>
+                   {% elif results.status != "Optimale" and results.status != "Limite d'itérations atteinte" %}
+                       {# Afficher un message si pas de solution optimale et pas juste limite d'itération atteinte #}
+                       <p><em>Aucune solution optimale finie trouvée.</em></p>
+                   {% endif %}
+
+                   {# Affichage des variables d'écart/excédent #}
+                   {% if results.slack_surplus_solution %}
+                       <h4>Variables d'Écart / Excédent :</h4>
+                       <ul>
+                       {% for var, val in results.slack_surplus_solution.items() %}
+                          <li>{{ var }} = {{ "%.4f"|format(val) }}
+                              {# Optionnel : Afficher le type de variable si disponible #}
+                              {% if results.variable_types and results.variable_types.get(var) %}
+                                  <em>({{ results.variable_types.get(var) }})</em>
+                              {% endif %}
+                          </li>
+                       {% endfor %}
+                       </ul>
+                   {% elif results.status == "Optimale" %} {# Si optimal mais pas de vars slack/surplus (rare mais possible) #}
+                       <h4>Variables d'Écart / Excédent :</h4>
+                       <p><em>Aucune.</em></p>
+                   {% endif %}
+                </div>
 
             </div>
         {% endif %}
 
-    </div>
+        </main>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+
+    {# Bloc pour le repeuplement des types de contraintes après soumission #}
+    {% if request and request.form and request.form.get('num_constraints') %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Ce code s'exécute APRÈS que script.js ait potentiellement généré les champs
+            try {
+                const numConstraintsForRepop = parseInt("{{ request.form.get('num_constraints', 0) }}");
+                if (numConstraintsForRepop > 0) {
+                    console.log("Repopulating constraint types from server data. Count:", numConstraintsForRepop);
+                    for (let i = 0; i < numConstraintsForRepop; i++) {
+                        const selectFieldName = `constraint_type_${i}`;
+                        const selectField = document.querySelector(`select[name="${selectFieldName}"]`);
+                        const submittedType = "{{ request.form.get('constraint_type_' ~ i) }}"; // ~ est l'opérateur de concaténation Jinja
+
+                        if (selectField && submittedType && submittedType !== 'None' && submittedType.trim() !== '') {
+                            selectField.value = submittedType;
+                            // console.log(`Set ${selectFieldName} to: ${submittedType}`);
+                        } else if (selectField) {
+                            // console.log(`No valid submitted type for ${selectFieldName}, value was '${submittedType}'. Using default.`);
+                        } else {
+                            // console.warn(`Select field ${selectFieldName} not found for repopulation. Was it generated?`);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Error during Jinja-driven repopulation of constraint types:", e);
+            }
+        });
+    </script>
+    {% endif %}
+
 </body>
 </html>

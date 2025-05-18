@@ -1,361 +1,392 @@
-from flask import Flask, render_template, request, flash # flash n'est pas utilisé ici, mais pourrait l'être
-import numpy as np
-import sys
-import io # Pour capturer les impressions formatées
+import os
+import json
+from flask import Flask, render_template, request, g # g pour la BDD
+from collections import defaultdict # Utile pour la reconstruction de adj pour les algos Python
 
-# Augmenter la limite de récursion (peut être nécessaire)
-# sys.setrecursionlimit(2000)
-
-# --- Copie et Adaptation de la classe SimplexSolver ---
-# (Modifications principales: retourner les résultats au lieu d'imprimer)
-
-class SimplexSolver:
-    """
-    Résout un problème de programmation linéaire en utilisant l'algorithme Simplex.
-    Adapté pour retourner les étapes pour une application web.
-    """
-
-    def __init__(self, objective_coeffs, constraint_coeffs, rhs_constraints, objective='max', var_names=None):
-        # ... (Initialisation comme avant) ...
-        self.objective = objective.lower()
-        self.objective_coeffs_orig = np.array(objective_coeffs, dtype=float)
-        self.constraint_coeffs = np.array(constraint_coeffs, dtype=float)
-        self.rhs_constraints = np.array(rhs_constraints, dtype=float)
-        self.num_vars = len(objective_coeffs)
-        self.num_constraints = len(rhs_constraints)
-        self.warning_message = None # Pour stocker les avertissements
-
-        if self.constraint_coeffs.shape != (self.num_constraints, self.num_vars):
-            raise ValueError("Dimensions incohérentes entre les coefficients des contraintes et le nombre de variables/contraintes.")
-        if len(self.rhs_constraints) != self.num_constraints:
-            raise ValueError("Dimensions incohérentes entre le membre droit et le nombre de contraintes.")
-        if np.any(self.rhs_constraints < 0):
-             self.warning_message = ("Le membre droit (RHS) contient des valeurs négatives. "
-                                     "L'algorithme Simplex standard suppose des RHS >= 0. "
-                                     "Le résultat pourrait être incorrect ou l'algorithme échouer. "
-                                     "(Dual Simplex / Two-Phase non implémenté)")
+# Importations locales (adaptez les chemins si votre structure est différente)
+# Si db.py est au même niveau que ce fichier app.py:
+from db import db_manager as db # Renommé pour clarté
+# Si simplex_solver etc. sont dans un sous-dossier 'app_logic' par exemple :
+# from .app_logic.simplex_solver import SimplexSolver
+# from .app_logic.problem_parser import parse_problem_form
+# from .app_logic import graph_algorithms
+# Pour l'instant, je suppose qu'ils sont au même niveau ou dans un package 'app'
+# comme dans votre structure précédente :
+import datetime 
+from app.simplex_solver import SimplexSolver
+from app.problem_parser import parse_problem_form
+from app import graph_algorithms
 
 
-        if var_names and len(var_names) == self.num_vars:
-            self.var_names = var_names
-        else:
-            self.var_names = [f'x{i+1}' for i in range(self.num_vars)]
+# --- Configuration Flask ---
+DATABASE = 'simplex_history.sqlite' # Nom du fichier BDD
 
-        self.slack_var_names = [f's{i+1}' for i in range(self.num_constraints)]
-        self.all_var_names = self.var_names + self.slack_var_names
-
-        if self.objective == 'min':
-            self.objective_coeffs = -self.objective_coeffs_orig
-        else:
-            self.objective_coeffs = self.objective_coeffs_orig
-
-        self._build_initial_tableau()
-        self.iteration_results = [] # Stocke les étapes pour l'affichage web
-        self.iteration = 0
-        self.max_iterations = 100
-
-    def _build_initial_tableau(self):
-        # ... (Construction du tableau comme avant) ...
-        num_total_vars = self.num_vars + self.num_constraints
-        self.tableau = np.zeros((self.num_constraints + 1, num_total_vars + 1))
-        self.tableau[:self.num_constraints, :self.num_vars] = self.constraint_coeffs
-        self.tableau[:self.num_constraints, self.num_vars:num_total_vars] = np.identity(self.num_constraints)
-        self.tableau[:self.num_constraints, -1] = self.rhs_constraints
-        self.tableau[-1, :self.num_vars] = -self.objective_coeffs
-        self.tableau[-1, -1] = 0
-        self.basic_vars_indices = list(range(self.num_vars, num_total_vars))
-
-    def _find_pivot_column(self):
-        # ... (Logique comme avant) ...
-        objective_row = self.tableau[-1, :-1]
-        min_val = np.min(objective_row)
-        if min_val >= -1e-9:
-            return -1
-        else:
-            return np.argmin(objective_row)
-
-    def _find_pivot_row(self, pivot_col_index):
-        # ... (Logique comme avant, mais sans les prints de debug) ...
-        rhs_col = self.tableau[:-1, -1]
-        pivot_col = self.tableau[:-1, pivot_col_index]
-        min_ratio = float('inf')
-        pivot_row_index = -1
-        for i in range(self.num_constraints):
-            if pivot_col[i] > 1e-9:
-                ratio = rhs_col[i] / pivot_col[i]
-                if ratio < min_ratio - 1e-9 :
-                    min_ratio = ratio
-                    pivot_row_index = i
-                elif abs(ratio - min_ratio) < 1e-9:
-                     pass # Garde le premier trouvé pour la simplicité
-
-        return pivot_row_index
-
-
-    def _pivot(self, pivot_row_index, pivot_col_index):
-        # ... (Logique comme avant) ...
-        pivot_element = self.tableau[pivot_row_index, pivot_col_index]
-        if abs(pivot_element) < 1e-9:
-             raise RuntimeError(f"Élément pivot ({pivot_element}) proche de zéro.")
-        self.tableau[pivot_row_index, :] /= pivot_element
-        for i in range(self.tableau.shape[0]):
-            if i != pivot_row_index:
-                multiplier = self.tableau[i, pivot_col_index]
-                self.tableau[i, :] -= multiplier * self.tableau[pivot_row_index, :]
-        self.basic_vars_indices[pivot_row_index] = pivot_col_index
-
-
-    def _format_tableau_to_string(self, current_tableau):
-        """Formate le tableau en une chaîne de caractères préformatée."""
-        # Utilise StringIO pour capturer une 'impression' formatée
-        output = io.StringIO()
-        header = ["Base"] + self.all_var_names + ["RHS"]
-        col_widths = [max(len(h), 8) for h in header] # Largeur minimale 8
-
-        # Ligne d'en-tête
-        header_line = " | ".join(f"{h:<{col_widths[j]}}" for j, h in enumerate(header))
-        print(header_line, file=output)
-        # Séparateur
-        separator = "-+-".join("-" * width for width in col_widths)
-        print(separator, file=output)
-
-        # Lignes de contraintes
-        for i in range(self.num_constraints):
-            base_var_index = self.basic_vars_indices[i]
-            base_var_name = self.all_var_names[base_var_index]
-            row_data = [f"{base_var_name:<{col_widths[0]}}"] + \
-                       [f"{val:<{col_widths[j+1]}.3f}" for j, val in enumerate(current_tableau[i, :])]
-            print(" | ".join(row_data), file=output)
-
-        # Ligne objectif (Z)
-        obj_row_data = [f"{'Z':<{col_widths[0]}}"] + \
-                       [f"{val:<{col_widths[j+1]}.3f}" for j, val in enumerate(current_tableau[-1, :])]
-        print(separator, file=output) # Séparateur avant la ligne Z
-        print(" | ".join(obj_row_data), file=output)
-
-        return output.getvalue()
-
-    def solve(self):
-        """Exécute l'algorithme Simplex et retourne les étapes."""
-        self.iteration_results = [] # Réinitialiser les résultats
-
-        # Enregistrer le tableau initial
-        initial_tableau_str = self._format_tableau_to_string(self.tableau)
-        self.iteration_results.append({
-            "title": "Tableau Initial",
-            "tableau_str": initial_tableau_str,
-            "message": f"Problème: {self.objective.capitalize()} Z"
-        })
-
-        while self.iteration < self.max_iterations:
-            self.iteration += 1
-            current_tableau_copy = np.round(self.tableau.copy(), 6) # Copie arrondie pour l'affichage
-
-            pivot_col_index = self._find_pivot_column()
-
-            # Condition d'arrêt: Optimalité
-            if pivot_col_index == -1:
-                final_tableau_str = self._format_tableau_to_string(current_tableau_copy)
-                self.iteration_results.append({
-                     "title": f"Itération {self.iteration} - Optimalité Atteinte",
-                     "tableau_str": final_tableau_str,
-                     "message": "Condition d'optimalité atteinte (tous Cj - Zj >= 0 dans la ligne Z)."
-                 })
-                solution_data = self.get_solution()
-                return "optimal", solution_data, self.iteration_results
-
-            entering_var = self.all_var_names[pivot_col_index]
-            pivot_row_index = self._find_pivot_row(pivot_col_index)
-
-            # Condition d'arrêt: Problème non borné
-            if pivot_row_index == -1:
-                current_tableau_str = self._format_tableau_to_string(current_tableau_copy)
-                self.iteration_results.append({
-                     "title": f"Itération {self.iteration} - Problème Non Borné",
-                     "tableau_str": current_tableau_str,
-                     "message": f"Variable entrante {entering_var}. Problème non borné détecté (aucun ratio positif).",
-                     "pivot_info": {
-                        "entering": entering_var, "leaving": "N/A", "pivot_val": "N/A",
-                        "row_idx": "N/A", "col_idx": pivot_col_index
-                     }
-                 })
-                return "unbounded", None, self.iteration_results
-
-            leaving_var_global_index = self.basic_vars_indices[pivot_row_index]
-            leaving_var = self.all_var_names[leaving_var_global_index]
-            pivot_element = self.tableau[pivot_row_index, pivot_col_index]
-
-            iter_message = f"Pivotage sur l'élément [{pivot_row_index}, {pivot_col_index}] = {pivot_element:.3f}"
-            pivot_info = {
-                 "entering": entering_var, "leaving": leaving_var, "pivot_val": f"{pivot_element:.3f}",
-                 "row_idx": pivot_row_index, "col_idx": pivot_col_index
-            }
-
-            # Enregistrer l'état *avant* le pivotage pour cette itération
-            tableau_before_pivot_str = self._format_tableau_to_string(current_tableau_copy)
-            self.iteration_results.append({
-                 "title": f"Itération {self.iteration} - Avant Pivotage",
-                 "tableau_str": tableau_before_pivot_str,
-                 "message": iter_message,
-                 "pivot_info": pivot_info
-             })
-
-
-            # Effectuer le pivotage
-            try:
-                 self._pivot(pivot_row_index, pivot_col_index)
-            except RuntimeError as e:
-                 # Gérer l'erreur de pivot si elle se produit
-                 self.iteration_results.append({
-                    "title": f"Itération {self.iteration} - Erreur de Pivotage",
-                    "tableau_str": tableau_before_pivot_str, # Montre le tableau avant l'erreur
-                    "message": f"Erreur lors du pivotage: {e}",
-                 })
-                 return "error", None, self.iteration_results
-
-
-            # Optionnel: Enregistrer aussi le tableau *après* pivotage dans la même itération ou la suivante
-            # Pourrait rendre la liste d'itérations très longue. Ici, on le verra au début de l'itération suivante.
-
-        # Condition d'arrêt: Max iterations
-        final_tableau_str = self._format_tableau_to_string(self.tableau)
-        self.iteration_results.append({
-             "title": f"Limite d'Itérations Atteinte ({self.max_iterations})",
-             "tableau_str": final_tableau_str,
-             "message": "Nombre maximum d'itérations atteint. La solution peut ne pas être optimale."
-         })
-        solution_data = self.get_solution() # Obtenir la solution actuelle
-        return "max_iterations", solution_data, self.iteration_results
-
-    def get_solution(self):
-        """Extrait la solution du tableau actuel."""
-        solution = {var: 0.0 for var in self.var_names}
-        slack_solution = {var: 0.0 for var in self.slack_var_names}
-        objective_value = self.tableau[-1, -1]
-
-        for i in range(self.num_constraints):
-            basic_var_index = self.basic_vars_indices[i]
-            value = self.tableau[i, -1]
-            var_name = self.all_var_names[basic_var_index]
-            if basic_var_index < self.num_vars: # Variable de décision
-                solution[var_name] = value
-            else: # Variable d'écart
-                 slack_solution[var_name] = value
-
-
-        # Ajuster la valeur de l'objectif si c'était une minimisation
-        final_objective_value = -objective_value if self.objective == 'min' else objective_value
-
-        return {
-            "variables": solution,
-            "slacks": slack_solution,
-            "objective_value": final_objective_value
-        }
-
-# --- Flask App ---
 app = Flask(__name__)
-app.secret_key = 'une_cle_secrete_difficile_a_deviner' # Important pour flash messages si utilisés
+# Si app.py est à la racine de simplex_app, et DATABASE aussi
+app.config['DATABASE'] = os.path.join(app.root_path, DATABASE)
+# Sinon, si DATABASE est dans un sous-dossier 'db_folder' par exemple:
+# app.config['DATABASE'] = os.path.join(app.root_path, 'db_folder', DATABASE)
 
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24))
+
+db.init_app(app) # Initialise les commandes BDD avec l'app
+
+# --- Filtres Jinja pour un affichage amélioré dans l'historique ---
+@app.template_filter('pretty_json')
+def pretty_json_filter(value):
+    if value is None: return "N/A"
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        return json.dumps(parsed, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError):
+        return str(value) # Retourner la valeur originale si ce n'est pas du JSON
+
+@app.template_filter('pretty_constraints_simplex')
+def pretty_constraints_simplex_filter(value):
+    """Affiche les contraintes Simplex (formatées pour x1, x2...)."""
+    if not value: return "N/A"
+    try:
+        constraints = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(constraints, list): return str(value)
+        lines = []
+        for c in constraints:
+            if not isinstance(c, dict): continue
+            coeffs = c.get("coeffs", [])
+            terms = []
+            for i, coeff_val in enumerate(coeffs):
+                if coeff_val == 0: continue
+                var = f"x{i+1}"
+                if coeff_val == 1: terms.append(var)
+                elif coeff_val == -1: terms.append(f"-{var}")
+                else: terms.append(f"{coeff_val:g}{var}") # :g pour format compact
+            lhs = " + ".join(terms).replace(" + -", " - ") if terms else "0"
+            op_map = {"le": "≤", "ge": "≥", "eq": "="}
+            op_display = op_map.get(c.get("type", "le"), c.get("type"))
+            rhs_display = f"{c.get('rhs', 0):g}"
+            lines.append(f"{lhs} {op_display} {rhs_display}")
+        return "<br>".join(lines) if lines else "Aucune contrainte"
+    except Exception as e:
+        return f"(Erreur formatage contraintes: {e})"
+
+@app.template_filter('pretty_objective')
+def pretty_objective_filter(value, var_prefix="x"):
+    """Affiche la fonction objectif."""
+    if not value: return "N/A"
+    try:
+        coeffs = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(coeffs, list): return str(value)
+        terms = []
+        for i, coeff_val in enumerate(coeffs):
+            if abs(coeff_val) < 1e-9 : continue # Ignorer coeffs nuls
+            var = f"{var_prefix}{i+1}"
+            term = ""
+            if coeff_val == 1: term = var
+            elif coeff_val == -1: term = f"-{var}"
+            else: term = f"{coeff_val:g}{var}"
+
+            if terms and coeff_val > 0: # Ajouter '+' si ce n'est pas le premier terme positif
+                terms.append(f"+ {term}")
+            else: # Premier terme, ou terme négatif (le signe est déjà dans 'term')
+                terms.append(term)
+        return " ".join(terms).replace(" + -", " - ") if terms else "0"
+    except Exception as e:
+        return f"(Erreur formatage objectif: {e})"
+
+@app.template_filter('pretty_solution_vars_simplex')
+def pretty_solution_vars_simplex_filter(value):
+    """Affiche les variables de solution Simplex."""
+    if not value: return "N/A"
+    try:
+        vars_dict = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(vars_dict, dict): return str(value)
+        lines = [f"{k} = {float(v):.4f}" for k, v in vars_dict.items()]
+        return "<br>".join(lines) if lines else "Aucune variable"
+    except Exception as e:
+        return f"(Erreur formatage solution: {e})"
+
+# --- Routes ---
 @app.route('/')
-def index():
-    # Affiche simplement le formulaire vide
-    return render_template('index.html')
+def index_route():
+    return render_template('index.html', request=request)
+
+@app.route('/history')
+def history_route():
+    con = db.get_db()
+    raw_history_entries = con.execute(
+        """SELECT id, timestamp, problem_type, 
+                  objective_type, objective_coeffs, constraints,
+                  graph_data_input_type, graph_data, graph_is_directed, graph_params, graph_results,
+                  status, objective_value, solution_vars, 
+                  warning
+           FROM history ORDER BY timestamp DESC"""
+    ).fetchall()
+
+    import json
+    history_entries_processed = []
+    for entry_row in raw_history_entries:
+        entry_dict = dict(entry_row) # Convertir sqlite3.Row en dictionnaire modifiable
+        try:
+            # Tenter de parser la chaîne timestamp en objet datetime
+            timestamp_str = entry_dict['timestamp']
+            dt_obj = None
+            possible_formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"]
+            for fmt in possible_formats:
+                try:
+                    dt_obj = datetime.datetime.strptime(timestamp_str, fmt)
+                    break
+                except ValueError:
+                    continue
+            if dt_obj:
+                entry_dict['timestamp'] = dt_obj
+            else:
+                print(f"AVERTISSEMENT: Impossible de parser le timestamp '{timestamp_str}' pour l'entrée ID {entry_dict['id']}. Utilisation de la chaîne brute.")
+        except Exception as e:
+            print(f"Erreur lors du traitement du timestamp pour l'entrée ID {entry_dict['id']}: {e}")
+        # Désérialiser les champs JSON si besoin
+        for key in ['solution_vars', 'graph_results', 'objective_coeffs', 'constraints', 'graph_data', 'graph_params']:
+            if key in entry_dict and isinstance(entry_dict[key], str):
+                try:
+                    entry_dict[key] = json.loads(entry_dict[key])
+                except Exception:
+                    pass  # Laisse la valeur brute si ce n'est pas du JSON
+        history_entries_processed.append(entry_dict)
+
+    return render_template('history.html', history_entries=history_entries_processed)
 
 @app.route('/solve', methods=['POST'])
-def solve():
-    results_data = None
+def solve_route():
+    results_dict = {}
     error_message = None
-    warning_message = None
+    warning_message_from_solver = None
+    problem_data_for_db = {} 
 
     try:
-        # 1. Récupérer les données du formulaire
-        objective_type = request.form.get('objective_type', 'max')
-        num_vars = int(request.form.get('num_vars'))
-        num_constraints = int(request.form.get('num_constraints'))
+        problem_data, parse_error = parse_problem_form(request.form)
+        if parse_error:
+            error_message = f"Erreur de saisie: {parse_error}"
+        else:
+            problem_data_for_db = problem_data.copy()
+            solver = SimplexSolver(problem_data) # Assurez-vous que SimplexSolver est bien importé
+            status, solution_details, iterations, duality_data, sensitivity_data, interpretation_data = solver.solve()
+            warning_message_from_solver = solver.warning_message
 
-        if num_vars <= 0 or num_constraints <= 0:
-             raise ValueError("Le nombre de variables et de contraintes doit être positif.")
+            status_map = {
+                solver.STATUS_OPTIMAL: "Optimale", solver.STATUS_UNBOUNDED: "Non Borné",
+                solver.STATUS_MAX_ITERATIONS: "Limite d'itérations atteinte",
+                solver.STATUS_ERROR: "Erreur de calcul", solver.STATUS_INFEASIBLE: "Infaisable"
+            }
+            status_class_map = {
+                solver.STATUS_OPTIMAL: "success", solver.STATUS_UNBOUNDED: "warning",
+                solver.STATUS_MAX_ITERATIONS: "warning", solver.STATUS_ERROR: "error",
+                solver.STATUS_INFEASIBLE: "error"
+            }
+            results_dict = {
+                "status": status_map.get(status, "Inconnu"),
+                "status_class": status_class_map.get(status, ""),
+                "iterations": iterations, "objective_type": problem_data['objective'],
+                "standard_form_str": solver.get_standard_form_string(),
+                "needs_artificial_vars": solver.needs_phase1,
+                "variable_types": solver.variable_types, "solution": None,
+                "slack_surplus_solution": None, "objective_value": None,
+                "duality": duality_data, "sensitivity": sensitivity_data,
+                "interpretation": interpretation_data, "warning_message": warning_message_from_solver
+            }
+            if solution_details:
+                results_dict["solution"] = solution_details["variables"]
+                results_dict["slack_surplus_solution"] = solution_details["slack_surplus"]
+                results_dict["objective_value"] = solution_details["objective_value"]
 
-        # Coefficients Objectif
-        objective_coeffs = []
-        for i in range(num_vars):
-            coeff_str = request.form.get(f'obj_coeff_{i}')
-            if coeff_str is None: raise ValueError(f"Coefficient objectif manquant pour x{i+1}")
-            objective_coeffs.append(float(coeff_str))
-
-        # Coefficients et RHS des Contraintes
-        constraint_coeffs = []
-        rhs_constraints = []
-        for i in range(num_constraints):
-            row_coeffs = []
-            for j in range(num_vars):
-                coeff_str = request.form.get(f'constraint_{i}_{j}')
-                if coeff_str is None: raise ValueError(f"Coefficient manquant pour la contrainte {i+1}, variable x{j+1}")
-                row_coeffs.append(float(coeff_str))
-            constraint_coeffs.append(row_coeffs)
-
-            rhs_str = request.form.get(f'rhs_{i}')
-            if rhs_str is None: raise ValueError(f"Membre droit (RHS) manquant pour la contrainte {i+1}")
-            rhs_constraints.append(float(rhs_str))
-
-        # 2. Créer et lancer le Solver
-        var_names = [f'x{i+1}' for i in range(num_vars)] # Noms génériques
-        solver = SimplexSolver(
-            objective_coeffs=objective_coeffs,
-            constraint_coeffs=constraint_coeffs,
-            rhs_constraints=rhs_constraints,
-            objective=objective_type,
-            var_names=var_names
-        )
-
-        status, solution_details, iterations = solver.solve()
-        warning_message = solver.warning_message # Récupérer l'avertissement potentiel de l'init
-
-        # 3. Préparer les résultats pour le template
-        status_map = {
-            "optimal": "Optimale",
-            "unbounded": "Non Borné",
-            "max_iterations": "Limite d'itérations atteinte",
-            "error": "Erreur de calcul"
-        }
-        status_class_map = { # Pour le style CSS
-             "optimal": "success",
-             "unbounded": "warning",
-             "max_iterations": "warning",
-             "error": "error"
-        }
-
-        results_data = {
-            "status": status_map.get(status, "Inconnu"),
-            "status_class": status_class_map.get(status, ""),
-            "iterations": iterations,
-            "objective_type": objective_type,
-            "solution": None,
-            "slack_solution": None,
-            "objective_value": None,
-        }
-        if solution_details:
-            results_data["solution"] = solution_details["variables"]
-            results_data["slack_solution"] = solution_details["slacks"]
-            results_data["objective_value"] = solution_details["objective_value"]
-
-
-    except ValueError as e:
-        error_message = f"Erreur de saisie ou de configuration: {e}"
+            if status != solver.STATUS_ERROR and not parse_error:
+                 db.add_history_entry('simplex', problem_data_for_db, results_dict)
+            else:
+                 print("INFO: Erreur Simplex ou parsing, entrée non ajoutée à l'historique.")
+    except ValueError as e: 
+        if not error_message: error_message = str(e)
     except Exception as e:
-        # Capturer les erreurs inattendues du solver ou autre
-        error_message = f"Une erreur interne est survenue: {e}"
+        error_message = f"Erreur interne inattendue: {e}"
         import traceback
-        print("--- TRACEBACK ---")
-        traceback.print_exc() # Imprime dans la console du serveur Flask pour le debug
-        print("--- END TRACEBACK ---")
+        traceback.print_exc()
+    return render_template('index.html', results=results_dict, error=error_message,
+                           warning=warning_message_from_solver, request=request)
+
+@app.route('/graphs', methods=['GET', 'POST'])
+def graphs_route():
+    graph_input_form_data = {} 
+    graph_results_display = {} # Initialiser à un dict vide pour éviter UndefinedError
+    graph_error_display = None
+    graph_data_for_js_viz = None
+
+    if request.method == 'GET':
+        graph_input_form_data['num_nodes'] = request.args.get('num_nodes', 3)
+        graph_input_form_data['is_directed'] = request.args.get('is_directed') == 'true'
+        # Conserver les autres paramètres pour le repeuplement
+        for param in ['start_node', 'end_node', 'source_node', 'sink_node']:
+            graph_input_form_data[param] = request.args.get(param, '')
+
+    if request.method == 'POST':
+        graph_input_form_data = request.form.to_dict() # Pour repeuplement
+        problem_data_for_db_graphs = {}
+        try:
+            num_nodes = int(graph_input_form_data.get('num_nodes', 0))
+            is_directed_form = graph_input_form_data.get('is_directed') == 'true'
+            
+            problem_data_for_db_graphs['is_directed'] = is_directed_form
+            problem_data_for_db_graphs['input_type'] = 'matrix'
+
+            node_names_list = []
+            if num_nodes > 0:
+                for i in range(num_nodes):
+                    name = graph_input_form_data.get(f'node_name_{i}', '').strip()
+                    if not name: name = chr(65 + i) 
+                    if name in node_names_list:
+                        raise ValueError(f"Nom de nœud '{name}' dupliqué.")
+                    node_names_list.append(name)
+            problem_data_for_db_graphs['node_names'] = node_names_list
+
+            adj_matrix_form_data = {} # Pour graph_algorithms.parse_adjacency_matrix
+            raw_matrix_for_db = {}    # Pour la BDD (avec indices i-j)
+            if num_nodes > 0:
+                for i in range(num_nodes):
+                    for j in range(num_nodes):
+                        val_str = graph_input_form_data.get(f'adj_matrix_{i}_{j}', "")
+                        adj_matrix_form_data[f"{i}-{j}"] = val_str
+                        raw_matrix_for_db[f"{i}-{j}"] = val_str 
+            problem_data_for_db_graphs['graph_data_raw'] = raw_matrix_for_db
+
+            # Récupérer les paramètres des algorithmes
+            start_node = graph_input_form_data.get('start_node', '').strip()
+            end_node = graph_input_form_data.get('end_node', '').strip()
+            source_node = graph_input_form_data.get('source_node', '').strip()
+            sink_node = graph_input_form_data.get('sink_node', '').strip()
+
+            problem_data_for_db_graphs.update({
+                'start_node': start_node, 'end_node': end_node,
+                'source_node': source_node, 'sink_node': sink_node
+            })
+            
+            if num_nodes <= 0:
+                graph_error_display = "Le nombre de nœuds doit être positif."
+            else:
+                adj, nodes_set, edges_for_mst_and_viz = graph_algorithms.parse_adjacency_matrix(
+                    num_nodes, node_names_list, adj_matrix_form_data, is_directed=is_directed_form
+                )
+                
+                vis_nodes = list(nodes_set)
+                vis_edges = [{"from": u, "to": v, "weight": w} for u, v, w in edges_for_mst_and_viz]
+                graph_data_for_js_viz = {
+                    "nodes": vis_nodes, "edges": vis_edges,
+                    "is_directed": is_directed_form, "dijkstra_path_edges": []
+                }
+                
+                # --- Exécution des Algorithmes ---
+                graph_results_display = {}
+
+                # Dijkstra
+                graph_results_display['dijkstra'] = {}
+                if start_node: # Exécuter seulement si un nœud de départ est fourni
+                    try:
+                        if start_node not in nodes_set: raise ValueError(f"Nœud de départ Dijkstra '{start_node}' inconnu.")
+                        target_node = end_node if end_node and end_node in nodes_set else None
+                        if end_node and not target_node: raise ValueError(f"Nœud d'arrivée Dijkstra '{end_node}' inconnu.")
+
+                        dist, path, _, _ = graph_algorithms.dijkstra(adj, start_node, target_node)
+                        if target_node:
+                            if dist == float('inf'):
+                                graph_results_display['dijkstra']['error'] = f"Aucun chemin de {start_node} à {target_node}."
+                            else:
+                                graph_results_display['dijkstra']['path'] = path
+                                graph_results_display['dijkstra']['distance'] = dist
+                                if path and len(path) > 1:
+                                    for k_path in range(len(path) - 1):
+                                        # Trouver poids pour l'arête du chemin (simplifié)
+                                        edge_w = next((w for v_n, w in adj.get(path[k_path],[]) if v_n == path[k_path+1]), 0)
+                                        graph_data_for_js_viz["dijkstra_path_edges"].append({"from": path[k_path], "to": path[k_path+1], "weight": edge_w})
+                        else:
+                            graph_results_display['dijkstra']['message'] = f"Distances calculées depuis {start_node}."
+                    except ValueError as e_dij: graph_results_display['dijkstra']['error'] = str(e_dij)
+                    except Exception as e_dij_gen: graph_results_display['dijkstra']['error'] = f"Erreur Dijkstra: {e_dij_gen}"
+                else:
+                     graph_results_display['dijkstra']['error'] = "Nœud de départ non spécifié."
 
 
-    # 4. Rendre le template avec les résultats ou l'erreur
-    # request.form est passé pour repeupler le formulaire en cas d'erreur/résultat
-    return render_template('index.html', results=results_data, error=error_message, warning=warning_message, request=request)
+                # Ford-Fulkerson
+                graph_results_display['ford_fulkerson'] = {}
+                if source_node and sink_node:
+                    try:
+                        if source_node not in nodes_set: raise ValueError(f"Nœud source F-F '{source_node}' inconnu.")
+                        if sink_node not in nodes_set: raise ValueError(f"Nœud puits F-F '{sink_node}' inconnu.")
+                        # F-F a besoin d'une liste d'adjacence où les poids sont des capacités.
+                        # `adj` devrait déjà être correct si `is_directed_form` a été utilisé pour le parsing.
+                        max_flow = graph_algorithms.ford_fulkerson(adj, nodes_set, source_node, sink_node)
+                        graph_results_display['ford_fulkerson']['max_flow'] = max_flow
+                    except ValueError as e_ff: graph_results_display['ford_fulkerson']['error'] = str(e_ff)
+                    except Exception as e_ff_gen: graph_results_display['ford_fulkerson']['error'] = f"Erreur F-F: {e_ff_gen}"
+                else:
+                    graph_results_display['ford_fulkerson']['error'] = "Source et puits non spécifiés."
 
+                # Prim (traite le graphe comme non-dirigé)
+                graph_results_display['prim'] = {}
+                prim_start_node_param = start_node if start_node in nodes_set else None
+                try:
+                    adj_undirected_for_prim = defaultdict(list)
+                    temp_nodes_for_prim = set()
+                    for u_mst, v_mst, w_mst in edges_for_mst_and_viz: # Utiliser la liste d'arêtes unique
+                        adj_undirected_for_prim[u_mst].append((v_mst, w_mst))
+                        adj_undirected_for_prim[v_mst].append((u_mst, w_mst))
+                        temp_nodes_for_prim.add(u_mst); temp_nodes_for_prim.add(v_mst)
+                    
+                    if not temp_nodes_for_prim and num_nodes > 0 : temp_nodes_for_prim = nodes_set # Si pas d'arêtes mais des noeuds
 
+                    if not temp_nodes_for_prim: # Graphe vide
+                         graph_results_display['prim'] = {"total_weight": 0, "mst_edges": []}
+                    else:
+                        prim_weight, prim_edges = graph_algorithms.prim_mst(adj_undirected_for_prim, temp_nodes_for_prim, prim_start_node_param)
+                        graph_results_display['prim'] = {"total_weight": prim_weight, "mst_edges": prim_edges}
+                except Exception as e_prim: graph_results_display['prim']['error'] = f"Erreur Prim: {str(e_prim)}"
+
+                # Kruskal (traite le graphe comme non-dirigé)
+                graph_results_display['kruskal'] = {}
+                try:
+                    if not nodes_set: # Graphe vide
+                        graph_results_display['kruskal'] = {"total_weight": 0, "mst_edges": []}
+                    else:
+                        kruskal_weight, kruskal_edges = graph_algorithms.kruskal_mst(nodes_set, edges_for_mst_and_viz)
+                        graph_results_display['kruskal'] = {"total_weight": kruskal_weight, "mst_edges": kruskal_edges}
+                except Exception as e_kruskal: graph_results_display['kruskal']['error'] = f"Erreur Kruskal: {str(e_kruskal)}"
+                
+                # --- Fin Exécution Algorithmes ---
+
+                results_for_db_graphs = {
+                    "status": "Terminé", 
+                    "graph_algorithms_outputs": graph_results_display,
+                    "warning_message": None 
+                }
+                db.add_history_entry('graph', problem_data_for_db_graphs, results_for_db_graphs)
+        
+        except ValueError as e:
+            graph_error_display = str(e)
+            graph_data_for_js_viz = None 
+        except Exception as e:
+            graph_error_display = f"Une erreur inattendue est survenue: {str(e)}"
+            graph_data_for_js_viz = None
+            import traceback
+            traceback.print_exc()
+
+    return render_template('graphs.html', 
+                           graph_input_form=graph_input_form_data,
+                           graph_results=graph_results_display, 
+                           graph_error=graph_error_display,
+                           graph_data_for_js=graph_data_for_js_viz,
+                           request=request)
+
+# --- if __name__ == '__main__': (comme avant) ---
 if __name__ == '__main__':
-    # Mettre debug=False en production
-    app.run(debug=True)
+    db_path = os.path.join(app.root_path, DATABASE) # Utiliser app.root_path pour la BDD
+    if not os.path.exists(db_path):
+         with app.app_context():
+              print(f"INFO: BDD non trouvée à {db_path}. Initialisation...")
+              db.init_db()
+              print("INFO: BDD initialisée.")
+    else:
+         print(f"INFO: BDD trouvée à {db_path}.")
+    app.run(debug=True, host='0.0.0.0') # host='0.0.0.0' pour accès réseau local

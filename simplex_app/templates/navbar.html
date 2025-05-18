@@ -1,0 +1,19 @@
+<nav class="navbar floating-navbar">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="{{ url_for('index_route') }}">Simplex RO <span class="beta-tag">Project</span></a>
+        <ul class="navbar-nav">
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if request.endpoint == 'index_route' }}" 
+                   href="{{ url_for('index_route') }}">Calculateur Simplex</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if request.endpoint == 'history_route' }}" 
+                   href="{{ url_for('history_route') }}">Historique</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if request.endpoint == 'graphs_route' }}" 
+                   href="{{ url_for('graphs_route') }}">Algorithmes Graphes</a>
+            </li>
+        </ul>
+    </div>
+</nav>

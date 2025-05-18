@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Algorithmes de Graphes (Matrice d'Adjacence)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Vis.js Network (nécessaire si graphs.js l'utilise pour la visualisation) -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link href="https://unpkg.com/vis-network/styles/vis-network.min.css" rel="stylesheet" type="text/css" />
+
+    <style>
+        /* Styles Minimaux pour la structure de cette page. 
+           La majorité des styles détaillés (matrice, résultats) devraient être dans style.css 
+           ou peuvent être ajoutés ici si spécifiques à cette page uniquement.
+        */
+        .graph-definition-section, .algo-params-section, .algo-section {
+            margin-bottom: 25px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            background-color: #fdfdfd;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .algo-section h3, .algo-params-section h3, .graph-definition-section h2 {
+            color: #007bff;
+            border-bottom: 2px solid #007bff;
+            margin-top: 0;
+            padding-bottom: 8px;
+            margin-bottom: 20px;
+        }
+        .algo-result ul { list-style: disc; padding-left: 20px; }
+        .algo-result p { margin-bottom: 0.5rem; }
+        .algo-result strong { color: #198754; }
+
+        .inline-inputs { margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;}
+        .inline-inputs label { margin-right: 5px; font-weight: normal; margin-bottom: 0;}
+        .inline-inputs input[type="text"], .inline-inputs input[type="number"] {
+            width: 120px; padding: 8px; border: 1px solid #ced4da; border-radius: 4px;
+        }
+        input#num_nodes { width: 80px; }
+
+        /* Conteneurs pour le JS */
+        #nodeNamesContainer, #adjacencyMatrixContainer { margin-top:15px; }
+        .note {font-size: 0.85em; color: #555; margin-top: 5px; margin-bottom: 15px;}
+
+        /* Pour la visualisation Vis.js */
+        #graphVisualizationContainer { margin-top: 30px; margin-bottom: 30px; }
+        #graphVisualization {
+            width: 100%; height: 480px; border: 1px solid #ced4da;
+            background-color: #f8f9fa; border-radius: 4px;
+        }
+        .vis-network .vis-manipulation .vis-edit-mode { display: none !important; } /* Cache boutons édition Vis.js */
+    </style>
+
+    {% include 'navbar.html' %}
+</head>
+<body>
+
+
+
+    <main class="container">
+        <h1>Algorithmes de Graphes (Saisie par Matrice d'Adjacence)</h1>
+
+        <form action="{{ url_for('graphs_route') }}" method="post" id="graphForm">
+            <section class="graph-definition-section">
+                <h2>Définition du Graphe</h2>
+                <div>
+                    <label for="num_nodes">Nombre de Nœuds :</label>
+                    {# Valeur repeuplée par Flask/Jinja si request.form existe, sinon défaut à 3 #}
+                    <input type="number" id="num_nodes" name="num_nodes" min="1" max="12" 
+                           value="{{ request.form.get('num_nodes', 3) }}" required>
+                    <span class="note">(Max 12 pour affichage raisonnable)</span>
+                </div>
+
+                {# Ces conteneurs seront remplis par graphs.js #}
+                <div id="nodeNamesContainer">
+                    <p class="note"><i>Définissez le nombre de nœuds pour générer les champs pour leurs noms.</i></p>
+                </div>
+                <div id="adjacencyMatrixContainer">
+                     <p class="note"><i>La matrice d'adjacence sera générée ici. Laissez vide ou mettez 0 pour pas d'arête.</i></p>
+                </div>
+
+                <div style="margin-top:20px; margin-bottom:15px;">
+                    <input type="checkbox" id="is_directed" name="is_directed" value="true" 
+                           {{ 'checked' if request.form.get('is_directed') }}>
+                    <label for="is_directed" style="font-weight:normal; display:inline;">Graphe Dirigé</label>
+                    <p class="note">Cochez pour Ford-Fulkerson et si les arêtes ont un sens. Pour les MSTs, le graphe est traité comme non-dirigé (si décoché, assurez-vous que la matrice est symétrique).</p>
+                </div>
+            </section>
+
+            <section class="algo-params-section">
+                <h3>Paramètres des Algorithmes</h3>
+                <p class="note">Utilisez les noms de nœuds que vous aurez définis. Sensible à la casse.</p>
+                <div class="inline-inputs">
+                    <label for="start_node">Nœud Départ (Dijkstra/Prim) :</label>
+                    <input type="text" id="start_node" name="start_node" value="{{ request.form.get('start_node', '') }}">
+
+                    <label for="end_node">Nœud Arrivée (Dijkstra) :</label>
+                    <input type="text" id="end_node" name="end_node" value="{{ request.form.get('end_node', '') }}">
+                </div>
+                 <div class="inline-inputs">
+                     <label for="source_node">Source (Ford-Fulkerson) :</label>
+                    <input type="text" id="source_node" name="source_node" value="{{ request.form.get('source_node', '') }}">
+
+                    <label for="sink_node">Puits (Ford-Fulkerson) :</label>
+                    <input type="text" id="sink_node" name="sink_node" value="{{ request.form.get('sink_node', '') }}">
+                </div>
+            </section>
+
+            <button type="submit" style="margin-top:30px;">Exécuter et Visualiser</button>
+        </form>
+
+        {# Affichage des erreurs #}
+        {% if graph_error %}
+            <div class="error" role="alert" style="margin-top:20px;">
+                <strong>Erreur :</strong> {{ graph_error }}
+            </div>
+        {% endif %}
+
+        {# Conteneur pour la visualisation du graphe (rempli par graphs.js) #}
+        {% if graph_data_for_js %} {# Cette variable doit être passée par Flask si des données sont prêtes pour la viz #}
+        <div id="graphVisualizationContainer">
+            <h3>Visualisation du Graphe</h3>
+            <div id="graphVisualization"></div> {# Vis.js ciblera cet ID #}
+        </div>
+        {% endif %}
+
+        {# Affichage des résultats des algorithmes #}
+        {% if graph_results %}
+            <div id="graph-results" style="margin-top: 20px;">
+                <h2>Résultats des Algorithmes</h2>
+                
+                <!-- Dijkstra -->
+                <section class="algo-section">
+                    <h3>Dijkstra (Plus Court Chemin)</h3>
+                    <div class="algo-result">
+                        {% if graph_results.dijkstra %}
+                            {% if graph_results.dijkstra.error %}
+                                <p class="warning">Erreur Dijkstra : {{ graph_results.dijkstra.error }}</p>
+                            {% elif graph_results.dijkstra.path %}
+                                <p>Depuis <strong>{{ request.form.get('start_node') }}</strong> vers <strong>{{ request.form.get('end_node') }}</strong> :</p>
+                                <p>Chemin : <strong>{{ graph_results.dijkstra.path | join(' → ') | safe }}</strong></p>
+                                <p>Distance Totale : <strong>{{ "%.2f"|format(graph_results.dijkstra.distance) }}</strong></p>
+                            {% elif graph_results.dijkstra.message %}
+                                 <p>{{ graph_results.dijkstra.message }}</p>
+                            {% else %}
+                                 <p>Paramètres Dijkstra non fournis ou chemin non trouvé.</p>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </section>
+
+                 <!-- Ford-Fulkerson -->
+                <section class="algo-section">
+                    <h3>Ford-Fulkerson (Flux Maximum)</h3>
+                     <div class="algo-result">
+                         {% if graph_results.ford_fulkerson %}
+                             {% if graph_results.ford_fulkerson.error %}
+                                <p class="warning">Erreur Ford-Fulkerson : {{ graph_results.ford_fulkerson.error }}</p>
+                             {% elif graph_results.ford_fulkerson.max_flow is not none %} {# Vérifier si max_flow a une valeur #}
+                                <p>Depuis Source <strong>{{ request.form.get('source_node') }}</strong> vers Puits <strong>{{ request.form.get('sink_node') }}</strong> :</p>
+                                <p>Flux Maximum : <strong>{{ "%.2f"|format(graph_results.ford_fulkerson.max_flow) }}</strong></p>
+                             {% else %}
+                                 <p>Paramètres Ford-Fulkerson non fournis ou erreur.</p>
+                             {% endif %}
+                         {% endif %}
+                    </div>
+                </section>
+
+                 <!-- Prim -->
+                <section class="algo-section">
+                    <h3>Prim (Arbre Couvrant de Poids Minimum - MST)</h3>
+                     <div class="algo-result">
+                         {% if graph_results.prim %}
+                             {% if graph_results.prim.error %}
+                                <p class="warning">Erreur Prim : {{ graph_results.prim.error }}</p>
+                             {% elif graph_results.prim.mst_edges is not none %}
+                                <p>Nœud de départ utilisé (si spécifié et valide) : {{ request.form.get('start_node') or 'Aléatoire/Premier' }}</p>
+                                <p>Poids Total du MST : <strong>{{ "%.2f"|format(graph_results.prim.total_weight) }}</strong></p>
+                                <p>Arêtes du MST :</p>
+                                {% if graph_results.prim.mst_edges %}
+                                    <ul>
+                                        {% for u, v, w in graph_results.prim.mst_edges %}
+                                            <li>({{ u }}, {{ v }}) - Poids: {{ "%.2f"|format(w) }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                {% else %}
+                                    <p>Aucune arête trouvée (graphe vide ou non connexe depuis le départ).</p>
+                                {% endif %}
+                             {% else %}
+                                <p>Erreur ou exécution de Prim non effectuée.</p>
+                             {% endif %}
+                         {% endif %}
+                    </div>
+                </section>
+
+                 <!-- Kruskal -->
+                <section class="algo-section">
+                    <h3>Kruskal (Arbre Couvrant de Poids Minimum - MST)</h3>
+                     <div class="algo-result">
+                          {% if graph_results.kruskal %}
+                             {% if graph_results.kruskal.error %}
+                                <p class="warning">Erreur Kruskal : {{ graph_results.kruskal.error }}</p>
+                             {% elif graph_results.kruskal.mst_edges is not none %}
+                                <p>Poids Total du MST : <strong>{{ "%.2f"|format(graph_results.kruskal.total_weight) }}</strong></p>
+                                <p>Arêtes du MST :</p>
+                                {% if graph_results.kruskal.mst_edges %}
+                                     <ul>
+                                        {% for u, v, w in graph_results.kruskal.mst_edges %}
+                                            <li>({{ u }}, {{ v }}) - Poids: {{ "%.2f"|format(w) }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                {% else %}
+                                     <p>Aucune arête trouvée (graphe vide ou non connexe).</p>
+                                {% endif %}
+                             {% else %}
+                                <p>Erreur ou exécution de Kruskal non effectuée.</p>
+                             {% endif %}
+                         {% endif %}
+                    </div>
+                </section>
+            </div>
+        {% endif %}
+    </main>
+
+    {# Script pour passer les données du serveur au JavaScript client #}
+    <script>
+        // Initialisation des objets globaux avec valeurs sûres et JS valide
+        var submittedGraphData = {
+            num_nodes: {{ request.form.get('num_nodes', 3) | tojson }},
+            node_names: {},
+            adj_matrix: {},
+            is_directed: {{ (request.form.get('is_directed') is not none) | tojson }},
+            start_node: {{ request.form.get('start_node', '') | tojson }},
+            end_node: {{ request.form.get('end_node', '') | tojson }},
+            source_node: {{ request.form.get('source_node', '') | tojson }},
+            sink_node: {{ request.form.get('sink_node', '') | tojson }}
+        };
+
+        // Remplissage dynamique des noms et de la matrice si formulaire soumis
+        {% if request.form.get('num_nodes') %}
+            {% set num_nodes_val = request.form.get('num_nodes')|int(0) %}
+            {% for i in range(num_nodes_val) %}
+                submittedGraphData.node_names[{{ i | tojson }}] = {{ request.form.get('node_name_' ~ i, '') | tojson }};
+                {% for j in range(num_nodes_val) %}
+                    submittedGraphData.adj_matrix[{{ (i ~ '-' ~ j) | tojson }}] = {{ request.form.get('adj_matrix_' ~ i ~ '_' ~ j, '') | tojson }};
+                {% endfor %}
+            {% endfor %}
+        {% endif %}
+        // Données pour la visualisation (si elles existent)
+        var graphDataForVisJs = {% if graph_data_for_js %}{{ graph_data_for_js | tojson | safe }}{% else %}null{% endif %};
+        // Pour débogage dans la console du navigateur :
+        console.log("SubmittedGraphData from HTML:", submittedGraphData);
+         console.log("GraphDataForVisJs from HTML:", graphDataForVisJs);
+    </script>
+    <script src="{{ url_for('static', filename='graphs.js') }}"></script>
+
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historique - Simplex RO</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+    {% include 'navbar.html' %}
+
+    <main class="container">
+        <h1>Historique des Calculs</h1>
+
+       
+        {% if history_entries %}
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type Problème</th>
+                    <th>Détails Entrée</th>
+                    <th>Paramètres</th>
+                    <th>Statut</th>
+                    <th>Résultats / Valeur Obj.</th>
+                    <th>Avertissements</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in history_entries %}
+                <tr>
+                    <td>{{ entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ entry['problem_type'] | capitalize }}</td>
+                    <td>
+    {% if entry.problem_type == 'simplex' %}
+        <strong>Objectif :</strong> {{ entry.objective_type | capitalize }}<br>
+        <strong>Coefficients Z :</strong>
+<ul>
+    {% if entry.objective_coeffs is mapping %}
+        {% for idx, coeff in entry.objective_coeffs.items() %}
+            <li>{{ idx }} = {{ coeff }}</li>
+        {% endfor %}
+    {% elif entry.objective_coeffs is iterable and entry.objective_coeffs is not string %}
+        {% for coeff in entry.objective_coeffs %}
+            <li>x{{ loop.index }} = {{ coeff }}</li>
+        {% endfor %}
+    {% else %}
+        <li>{{ entry.objective_coeffs }}</li>
+    {% endif %}
+</ul>
+<strong>Contraintes :</strong>
+<ul>
+    {% if entry.constraints is mapping %}
+        {% for k, v in entry.constraints.items() %}
+            <li>{{ k }} : {{ v }}</li>
+        {% endfor %}
+    {% elif entry.constraints is iterable and entry.constraints is not string %}
+        {% for c in entry.constraints %}
+            <li>
+                {% if c.coeffs is defined and c.type is defined and c.rhs is defined %}
+                    {# Affichage mathématique #}
+                    {% for coeff in c.coeffs %}
+                        {% if not loop.first %} + {% endif %}{{ coeff }}·x{{ loop.index }}
+                    {% endfor %}
+                    {% if c.type == 'le' %} ≤ {% elif c.type == 'ge' %} ≥ {% elif c.type == 'eq' %} = {% else %} {{ c.type }} {% endif %}
+                    {{ c.rhs }}
+                {% elif c.lhs is defined and c.sign is defined and c.rhs is defined %}
+                    {{ c.lhs }} {{ c.sign }} {{ c.rhs }}
+                {% else %}
+                    {{ c }}
+                {% endif %}
+            </li>
+        {% endfor %}
+    {% else %}
+        <li>{{ entry.constraints }}</li>
+    {% endif %}
+</ul>        </ul>
+    {% elif entry.problem_type == 'graph' %}
+        <strong>Type Saisie :</strong> {{ entry.graph_data_input_type | capitalize }}<br>
+        <strong>Dirigé :</strong> {{ 'Oui' if entry.graph_is_directed else 'Non' }}<br>
+        <strong>Données Graphe :</strong>
+<ul style="columns:2; -webkit-columns:2; -moz-columns:2;">
+    {% if entry.graph_data is mapping %}
+        {% set keys_sorted = entry.graph_data.keys()|list|sort %}
+        {% set current_row = None %}
+        {% for k in keys_sorted %}
+            {% set row = k.split('-')[0] if '-' in k else None %}
+            {% if current_row != row and not loop.first %}
+                </ul><ul style="columns:2; -webkit-columns:2; -moz-columns:2;">
+            {% endif %}
+            <li>{{ k }} : {{ entry.graph_data[k] }}</li>
+            {% set current_row = row %}
+        {% endfor %}
+    {% else %}
+        <li>{{ entry.graph_data }}</li>
+    {% endif %}
+</ul>        </ul>
+    {% endif %}
+</td>
+<td> {# Paramètres #}
+    {% if entry.problem_type == 'graph' and entry.graph_params %}
+        <ul>
+        {% if entry.graph_params is mapping %}
+            {% for k, v in entry.graph_params.items() %}
+                <li>{{ k }} : {% if v %}{{ v }}{% else %}(vide){% endif %}</li>
+            {% endfor %}
+        {% else %}
+            <li>{% if entry.graph_params %}{{ entry.graph_params }}{% else %}(vide){% endif %}</li>
+        {% endif %}
+        </ul>
+    {% else %}
+        N/A
+    {% endif %}
+                    </td>
+                    <td>{{ entry['status'] }}</td>
+                    <td> {# Résultats / Valeur Obj. #}
+                        {% if entry.problem_type == 'simplex' %}
+                            {% if entry.objective_value is not none %}
+                                <strong>Z = {{ "%.4f"|format(entry.objective_value) }}</strong><br>
+                            {% endif %}
+                            <strong>Variables :</strong>
+                            <ul>
+                            {% if entry.solution_vars %}
+                                {% set vars = entry.solution_vars if entry.solution_vars is mapping else entry.solution_vars|fromjson %}
+                                {% for var, val in vars.items() %}
+                                    <li>{{ var }} = {{ val }}</li>
+                                {% endfor %}
+                            {% else %}
+                                <li>N/A</li>
+                            {% endif %}
+                            </ul>
+                        {% elif entry.problem_type == 'graph' and entry.graph_results %}
+                            {% set results = entry.graph_results if entry.graph_results is mapping else entry.graph_results|fromjson %}
+                            <div class="algo-results">
+                            {% for algo, res in results.items() %}
+                                <div class="algo-block">
+                                    <strong>{{ algo|capitalize }} :</strong>
+                                    {% if res.error %}
+                                        <div class="text-danger">Erreur : {{ res.error }}</div>
+                                    {% else %}
+                                        {% if res.total_weight is defined %}
+                                            <div>Total poids : {{ res.total_weight }}</div>
+                                        {% endif %}
+                                        {% if res.mst_edges is defined %}
+                                            <div>Arêtes MST :
+                                                <ul>
+                                                {% for edge in res.mst_edges %}
+                                                    <li>{{ edge[0] }} — {{ edge[1] }} (poids {{ edge[2] }})</li>
+                                                {% endfor %}
+                                                </ul>
+                                            </div>
+                                        {% endif %}
+                                        {% if res.shortest_paths is defined %}
+                                            <div>Chemins les plus courts :
+                                                <ul>
+                                                {% for node, dist in res.shortest_paths.items() %}
+                                                    <li>{{ node }} : {{ dist }}</li>
+                                                {% endfor %}
+                                                </ul>
+                                            </div>
+                                        {% endif %}
+                                        {% if res.max_flow is defined %}
+                                            <div>Flux maximum : {{ res.max_flow }}</div>
+                                        {% endif %}
+                                        {% if res.path is defined %}
+                                            <div>Chemin trouvé :
+                                                <ul>
+                                                {% for node in res.path %}
+                                                    <li>{{ node }}</li>
+                                                {% endfor %}
+                                                </ul>
+                                            </div>
+                                        {% endif %}
+                                    {% endif %}
+                                </div>
+                                <hr>
+                            {% endfor %}
+                            </div>
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </td>
+                    <td>{{ entry['warning'] if entry['warning'] else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>Aucun historique trouvé.</p>
+        {% endif %}
+
+    </main>
+</body>
+</html>
+
+{# Filtre Jinja personnalisé (à définir dans app.py) pour afficher le JSON #}
